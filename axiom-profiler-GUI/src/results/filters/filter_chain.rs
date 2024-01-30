@@ -21,6 +21,7 @@ pub struct FilterChain {
 const DEFAULT_FILTER_CHAIN: &[Filter] = &[
     Filter::IgnoreTheorySolving,
     Filter::MaxInsts(DEFAULT_NODE_COUNT),
+    Filter::PruneEqualityNodes,
 ];
 
 #[derive(Properties, PartialEq)]

@@ -1,18 +1,18 @@
 use petgraph::Direction::{Incoming, Outgoing};
-use smt_log_parser::parsers::z3::inst_graph::InstInfo;
+use smt_log_parser::parsers::z3::inst_graph::NodeInfo;
 use yew::prelude::*;
 
 use super::graph_filters::Filter;
 
 #[derive(Properties, PartialEq)]
 pub struct NodeActionsProps {
-    pub selected_nodes: Vec<InstInfo>,
+    pub selected_nodes: Vec<NodeInfo>,
     pub action: Callback<Vec<Filter>>,
 }
 
 #[function_component(NodeActions)]
 pub fn node_actions(props: &NodeActionsProps) -> Html {
-    let callback_from = |filter_for_inst: Box<dyn Fn(&InstInfo) -> Filter>| {
+    let callback_from = |filter_for_inst: Box<dyn Fn(&NodeInfo) -> Filter>| {
         let callback = props.action.clone();
         let selected_insts = props.selected_nodes.clone();
         Callback::from(move |_| {
@@ -20,32 +20,40 @@ pub fn node_actions(props: &NodeActionsProps) -> Html {
             callback.emit(filters);
         })
     };
-    let show_subtree = callback_from(Box::new(|inst: &InstInfo| {
-        Filter::VisitSubTreeWithRoot(inst.node_index, true)
+    let show_subtree = callback_from(Box::new(|inst: &NodeInfo| {
+        Filter::VisitSubTreeWithRoot(inst.node_index(), true)
     }));
-    let hide_subtree = callback_from(Box::new(|inst: &InstInfo| {
-        Filter::VisitSubTreeWithRoot(inst.node_index, false)
+    let hide_subtree = callback_from(Box::new(|inst: &NodeInfo| {
+        Filter::VisitSubTreeWithRoot(inst.node_index(), false)
     }));
-    let show_children = callback_from(Box::new(|inst: &InstInfo| {
-        Filter::ShowNeighbours(inst.node_index, Outgoing)
+    let show_children = callback_from(Box::new(|inst: &NodeInfo| {
+        Filter::ShowNeighbours(inst.node_index(), Outgoing)
     }));
-    let show_parents = callback_from(Box::new(|inst: &InstInfo| {
-        Filter::ShowNeighbours(inst.node_index, Incoming)
+    let show_parents = callback_from(Box::new(|inst: &NodeInfo| {
+        Filter::ShowNeighbours(inst.node_index(), Incoming)
     }));
-    let show_source_tree = callback_from(Box::new(|inst: &InstInfo| {
-        Filter::VisitSourceTree(inst.node_index, true)
+    let show_source_tree = callback_from(Box::new(|inst: &NodeInfo| {
+        Filter::VisitSourceTree(inst.node_index(), true)
     }));
-    let hide_source_tree = callback_from(Box::new(|inst: &InstInfo| {
-        Filter::VisitSourceTree(inst.node_index, false)
+    let hide_source_tree = callback_from(Box::new(|inst: &NodeInfo| {
+        Filter::VisitSourceTree(inst.node_index(), false)
     }));
-    let ignore_quantifier = callback_from(Box::new(|inst: &InstInfo| {
-        Filter::IgnoreQuantifier(inst.mkind.quant_idx())
+    let ignore_quantifier = callback_from(Box::new(|inst: &NodeInfo| {
+            match inst.mkind() {
+                Some(mkind) => Filter::IgnoreQuantifier(mkind.quant_idx()),
+                None => Filter::IgnoreQuantifier(None),
+            }
+        }
+    ));
+    let ignore_all_but_quantifier = callback_from(Box::new(|inst: &NodeInfo| {
+        // Filter::IgnoreAllButQuantifier(inst.mkind.quant_idx())
+            match inst.mkind() {
+                Some(mkind) => Filter::IgnoreAllButQuantifier(mkind.quant_idx()),
+                None => Filter::IgnoreAllButQuantifier(None),
+            }
     }));
-    let ignore_all_but_quantifier = callback_from(Box::new(|inst: &InstInfo| {
-        Filter::IgnoreAllButQuantifier(inst.mkind.quant_idx())
-    }));
-    let show_longest_path = callback_from(Box::new(|inst: &InstInfo| {
-        Filter::ShowLongestPath(inst.node_index)
+    let show_longest_path = callback_from(Box::new(|inst: &NodeInfo| {
+        Filter::ShowLongestPath(inst.node_index())
     }));
     html! {
     <>

@@ -4,7 +4,7 @@ use gloo::console::log;
 use petgraph::{stable_graph::NodeIndex, Direction};
 use smt_log_parser::{
     items::QuantIdx,
-    parsers::z3::inst_graph::{InstGraph, InstInfo, NodeData}, Z3Parser,
+    parsers::z3::inst_graph::{InstGraph, InstInfo, InstNode, NodeInfo}, Z3Parser,
 };
 use std::fmt::Display;
 use yew::prelude::*;
@@ -22,8 +22,11 @@ pub enum Filter {
     VisitSubTreeWithRoot(NodeIndex, bool),
     MaxDepth(usize),
     ShowLongestPath(NodeIndex),
-    SelectNthMatchingLoop(usize),
+    // SelectNthMatchingLoop(usize),
     ShowMatchingLoopSubgraph,
+    IgnoreEqualityNodes,
+    PruneEqualityNodes,
+    IgnoreChainEqualityNodes,
 }
 
 impl Display for Filter {
@@ -63,18 +66,21 @@ impl Display for Filter {
             Self::ShowLongestPath(node) => {
                 write!(f, "Showing longest path through node {}", node.index())
             }
-            Self::SelectNthMatchingLoop(n) => {
-                let ordinal = match n {
-                    0 => "".to_string(),
-                    1 => "2nd".to_string(),
-                    2 => "3rd".to_string(),
-                    n => (n+1).to_string() + "th",
-                };
-                write!(f, "Showing {} longest matching loop", ordinal)
-            }
+            // Self::SelectNthMatchingLoop(n) => {
+            //     let ordinal = match n {
+            //         0 => "".to_string(),
+            //         1 => "2nd".to_string(),
+            //         2 => "3rd".to_string(),
+            //         n => (n+1).to_string() + "th",
+            //     };
+            //     write!(f, "Showing {} longest matching loop", ordinal)
+            // }
             Self::ShowMatchingLoopSubgraph => {
                 write!(f, "Showing all potential matching loops")
             }
+            Self::IgnoreEqualityNodes => write!(f, "Hiding all equality nodes"),
+            Self::PruneEqualityNodes => write!(f, "Hiding all equality nodes without visible ancestor or descendant that is an instantiation node"),
+            Self::IgnoreChainEqualityNodes => write!(f, "Hiding all equality nodes with exactly one child and one parent"),
         }
     }
 }
@@ -88,19 +94,22 @@ pub enum FilterOutput {
 impl Filter {
     pub fn apply(self: Filter, graph: &mut InstGraph, parser: &mut Z3Parser) -> FilterOutput {
         match self {
-            Filter::MaxNodeIdx(max) => graph.retain_nodes(|node: &NodeData| node.orig_graph_idx.index() <= max),
-            Filter::IgnoreTheorySolving => graph.retain_nodes(|node: &NodeData| !node.is_theory_inst),
-            Filter::IgnoreQuantifier(qidx) => graph.retain_nodes(|node: &NodeData| node.mkind.quant_idx() != qidx),
-            Filter::IgnoreAllButQuantifier(qidx) => graph.retain_nodes(|node: &NodeData| node.mkind.quant_idx() == qidx),
+            Filter::MaxNodeIdx(max) => graph.retain_nodes(|node: &InstNode| node.orig_graph_idx.index() <= max),
+            Filter::IgnoreTheorySolving => graph.retain_nodes(|node: &InstNode| !node.is_theory_inst),
+            Filter::IgnoreQuantifier(qidx) => graph.retain_nodes(|node: &InstNode| node.mkind.quant_idx() != qidx),
+            Filter::IgnoreAllButQuantifier(qidx) => graph.retain_nodes(|node: &InstNode| node.mkind.quant_idx() == qidx),
             Filter::MaxInsts(n) => graph.keep_n_most_costly(n),
             Filter::MaxBranching(n) => graph.keep_n_most_branching(n),
             Filter::ShowNeighbours(nidx, direction) => graph.show_neighbours(nidx, direction),
             Filter::VisitSubTreeWithRoot(nidx, retain) => graph.visit_descendants(nidx, retain),
             Filter::VisitSourceTree(nidx, retain) => graph.visit_ancestors(nidx, retain),
-            Filter::MaxDepth(depth) => graph.retain_nodes(|node: &NodeData| node.min_depth.unwrap() <= depth),
+            Filter::MaxDepth(depth) => graph.retain_nodes(|node: &InstNode| node.min_depth.unwrap() <= depth),
             Filter::ShowLongestPath(nidx) => return FilterOutput::LongestPath(graph.show_longest_path_through(nidx)),
-            Filter::SelectNthMatchingLoop(n) => return FilterOutput::MatchingLoopGeneralizedTerms(graph.show_nth_matching_loop(n, parser)),
+            // Filter::SelectNthMatchingLoop(n) => return FilterOutput::MatchingLoopGeneralizedTerms(graph.show_nth_matching_loop(n, parser)),
             Filter::ShowMatchingLoopSubgraph => graph.show_matching_loop_subgraph(),
+            Filter::IgnoreEqualityNodes => graph.hide_equality_nodes(),
+            Filter::PruneEqualityNodes => graph.prune_equality_nodes(),
+            Filter::IgnoreChainEqualityNodes => graph.ignore_chain_equality_nodes(),
         }
         FilterOutput::None
     }
@@ -111,8 +120,8 @@ pub struct GraphFilters {
     max_instantiations: usize,
     max_branching: usize,
     max_depth: usize,
-    selected_insts: Vec<InstInfo>,
-    _selected_insts_listener: ContextHandle<Vec<InstInfo>>,
+    selected_nodes: Vec<NodeInfo>,
+    _selected_nodes_listener: ContextHandle<Vec<NodeInfo>>,
 }
 
 #[derive(Properties, PartialEq)]
@@ -125,7 +134,7 @@ pub enum Msg {
     SetMaxInsts(usize),
     SetMaxBranching(usize),
     SetMaxDepth(usize),
-    SelectedInstsUpdated(Vec<InstInfo>),
+    SelectedInstsUpdated(Vec<NodeInfo>),
 }
 
 impl Component for GraphFilters {
@@ -150,8 +159,8 @@ impl Component for GraphFilters {
                 self.max_depth = to;
                 true
             }
-            Msg::SelectedInstsUpdated(selected_insts) => {
-                self.selected_insts = selected_insts;
+            Msg::SelectedInstsUpdated(selected_nodes) => {
+                self.selected_nodes = selected_nodes;
                 true
             }
         }
@@ -159,7 +168,7 @@ impl Component for GraphFilters {
 
     fn create(ctx: &Context<Self>) -> Self {
         log!("Creating GraphFilters component");
-        let (selected_insts, _selected_insts_listener) = ctx
+        let (selected_nodes, _selected_nodes_listener) = ctx
             .link()
             .context(ctx.link().callback(Msg::SelectedInstsUpdated))
             .expect("No context provided");
@@ -168,8 +177,8 @@ impl Component for GraphFilters {
             max_instantiations: DEFAULT_NODE_COUNT,
             max_branching: usize::MAX,
             max_depth: usize::MAX,
-            selected_insts,
-            _selected_insts_listener,
+            selected_nodes,
+            _selected_nodes_listener,
         }
     }
     fn view(&self, ctx: &Context<Self>) -> Html {
@@ -196,6 +205,18 @@ impl Component for GraphFilters {
             let callback = ctx.props().add_filters.clone();
             let max_depth = self.max_depth;
             Callback::from(move |_| callback.emit(vec![Filter::MaxDepth(max_depth)]))
+        };
+        let ignore_equality_nodes = {
+            let callback = ctx.props().add_filters.clone();
+            Callback::from(move |_| callback.emit(vec![Filter::IgnoreEqualityNodes]))
+        };
+        let prune_equalities = {
+            let callback = ctx.props().add_filters.clone();
+            Callback::from(move |_| callback.emit(vec![Filter::PruneEqualityNodes]))
+        };
+        let ignore_chain_equalities = {
+            let callback = ctx.props().add_filters.clone();
+            Callback::from(move |_| callback.emit(vec![Filter::IgnoreChainEqualityNodes]))
         };
         html! {
             <div>
@@ -236,9 +257,21 @@ impl Component for GraphFilters {
                     />
                     <button onclick={add_max_depth_filter}>{"Add"}</button>
                 </div>
-                {if !self.selected_insts.is_empty() {
+                <div>
+                    <label for="hide_equalities">{"Ignore equality nodes"}</label>
+                    <button onclick={ignore_equality_nodes} id="hide_equalities">{"Add"}</button>
+                </div>
+                <div>
+                    <label for="prune_equalities">{"Prune equality nodes"}</label>
+                    <button onclick={prune_equalities} id="prune_equalities">{"Add"}</button>
+                </div>
+                <div>
+                    <label for="ignore_chain_equalities">{"Ignore chain equality nodes"}</label>
+                    <button onclick={ignore_chain_equalities} id="ignore_chain_equalities">{"Add"}</button>
+                </div>
+                {if !self.selected_nodes.is_empty() {
                     html! {
-                        <NodeActions selected_nodes={self.selected_insts.clone()} action={ctx.props().add_filters.clone()} />
+                        <NodeActions selected_nodes={self.selected_nodes.clone()} action={ctx.props().add_filters.clone()} />
                     }
                 } else {
                     html! {}

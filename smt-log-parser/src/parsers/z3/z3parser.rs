@@ -29,6 +29,7 @@ pub struct Z3Parser {
     pub(super) stack: Stack,
 
     pub strings: StringTable,
+    pub(super) equalities: Vec<EqualityExpl>,
 }
 
 impl Default for Z3Parser {
@@ -43,6 +44,7 @@ impl Default for Z3Parser {
             egraph: Default::default(),
             stack: Default::default(),
             strings,
+            equalities: Vec::new(),
         }
     }
 }
@@ -336,12 +338,16 @@ impl Z3LogParser for Z3Parser {
                     let eq = self.parse_existing_enode(eq)?;
                     Self::expect_completed(kind_dependent_info)?;
                     let to = self.parse_existing_enode(l.next().ok_or(Error::UnexpectedNewline)?)?;
-                    EqualityExpl::Literal { from, eq, to }
+                    let eq_expl = EqualityExpl::Literal { from, eq, to };
+                    // self.equalities.push(eq_expl.clone());
+                    eq_expl
                 }
                 "cg" => {
                     let arg_eqs = self.gobble_enode_pairs(kind_dependent_info)?;
                     let to = self.parse_existing_enode(l.next().ok_or(Error::UnexpectedNewline)?)?;
-                    EqualityExpl::Congruence { from, arg_eqs, to }
+                    let eq_expl = EqualityExpl::Congruence { from, arg_eqs, to };
+                    // self.equalities.push(eq_expl.clone());
+                    eq_expl
                     // For each pair (#A #B), reconstruct dependent equality explanations connecting #A to #B ...
                 }
                 "th" => {
@@ -369,10 +375,14 @@ impl Z3LogParser for Z3Parser {
                 }
             }
         };
+        self.equalities.push(eq_expl.clone());
         // Return if there is unexpectedly more data
         Self::expect_completed(l)?;
 
-        self.egraph.new_equality(from, eq_expl, &self.stack)?;
+        let (from, to, inst) = self.egraph.new_equality(from, eq_expl, &self.stack)?;
+        if let Some(inst) = inst {
+            self.insts[inst].add_yield_eq(from, to);
+        }
         Ok(())
     }
 
@@ -406,6 +416,7 @@ impl Z3LogParser for Z3Parser {
         };
 
         let mut blamed = Vec::new();
+        let mut blamed_eqs = Vec::new();
         while let Some(word) = l.next() {
             if let Some(first_term) = word.strip_prefix('(') {
                 // assumes that if we see "(#A", the next word in the split is "#B)"
@@ -415,7 +426,7 @@ impl Z3LogParser for Z3Parser {
                 // See comment in `EGraph::get_equalities`
                 let can_mismatch = || self.is_ge_version(4, 12, 3) &&
                     self.terms[self.egraph.get_owner(to)].kind.app_name().is_some_and(|app| &self.strings[app] == "if");
-                self.egraph.blame_equalities(from, to, &self.stack, &mut blamed, can_mismatch)?;
+                self.egraph.blame_equalities(from, to, &self.stack, &mut blamed_eqs, can_mismatch)?;
             } else {
                 let term = self.parse_existing_enode(word)?;
                 blamed.try_reserve(1)?;
@@ -423,7 +434,7 @@ impl Z3LogParser for Z3Parser {
             };
         }
 
-        let match_ = Match { kind, blamed: blamed.into_boxed_slice() };
+        let match_ = Match { kind, blamed: blamed.into_boxed_slice(), blamed_eqs, };
         self.insts.new_match(fingerprint, match_)?;
         Ok(())
     }
@@ -486,7 +497,7 @@ impl Z3LogParser for Z3Parser {
             }
             _ => return Err(Error::UnknownInstMethod(method.to_string())),
         };
-        let match_ = Match { kind, blamed: blamed.into_boxed_slice() };
+        let match_ = Match { kind, blamed: blamed.into_boxed_slice(), blamed_eqs: Vec::new() };
         self.insts.new_match(fingerprint, match_)?;
         Ok(())
     }
@@ -511,6 +522,7 @@ impl Z3LogParser for Z3Parser {
             z3_generation,
             yields_terms: Default::default(),
             cost: 1.0,
+            yields_equalities: Vec::new(),
         };
         let iidx = self.insts.new_inst(fingerprint, inst)?;
         self.inst_stack.try_reserve(1)?;
@@ -556,7 +568,8 @@ impl Z3Parser {
             insts = others;
             let match_ = &self.insts.matches[last.match_];
             let deps: Vec<_> = match_
-                .due_to_enodes()
+                // .due_to_enodes()
+                .due_to_terms()
                 .filter_map(|(_, blame)| self.egraph[blame].created_by)
                 .collect();
             let num_deps = deps.len() as f32;

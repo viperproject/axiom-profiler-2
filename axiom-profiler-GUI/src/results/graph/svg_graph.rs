@@ -5,7 +5,8 @@ use web_sys::{Event, HtmlElement, SvgsvgElement};
 use yew::prelude::*;
 use yew::{function_component, html, use_node_ref, Html};
 
-const NODE_SHAPE: &str = "polygon";
+const INST_NODE_SHAPE: &str = "polygon";
+const EQ_NODE_SHAPE: &str = "ellipse";
 
 #[derive(Properties, PartialEq, Default)]
 pub struct GraphProps {
@@ -81,10 +82,13 @@ pub fn graph(props: &GraphProps) -> Html {
                             let nodes = div.get_elements_by_class_name("node");
                             for i in 0..nodes.length() {
                                 let node = nodes.item(i).unwrap();
-                                let ellipse = node
-                                    .query_selector(NODE_SHAPE)
-                                    .expect("Failed to select ellipse")
-                                    .unwrap();
+                                let ellipse = if let Some(el) = node
+                                    .query_selector(INST_NODE_SHAPE)
+                                    .expect("Failed to select ellipse") {
+                                        el
+                                    } else {
+                                        node.query_selector(EQ_NODE_SHAPE).expect("Failed to select ellipse").unwrap()
+                                    };
                                 let _ = ellipse.set_attribute("stroke-width", "1");
                             }
                             let edges = div.get_elements_by_class_name("edge direct");
@@ -114,10 +118,13 @@ pub fn graph(props: &GraphProps) -> Html {
                     .map(|i| {
                         // extract node_index from node to construct callback that emits it
                         let node = descendant_nodes.item(i).unwrap();
-                        let ellipse = node
-                            .query_selector(NODE_SHAPE)
-                            .expect("Failed to select title element")
-                            .unwrap();
+                        let ellipse = if let Some(el) = node
+                            .query_selector(INST_NODE_SHAPE)
+                            .expect("Failed to select ellipse") {
+                                el
+                            } else {
+                                node.query_selector(EQ_NODE_SHAPE).expect("Failed to select ellipse").unwrap()
+                            };
                         let node_index = node
                             .id()
                             .strip_prefix("node")
@@ -258,10 +265,13 @@ pub fn graph(props: &GraphProps) -> Html {
                                 .parse::<usize>()
                                 .unwrap(),
                         );
-                        let ellipse = node
-                            .query_selector(NODE_SHAPE)
-                            .expect("Failed to select ellipse")
-                            .unwrap();
+                        let ellipse = if let Some(el) = node
+                            .query_selector(INST_NODE_SHAPE)
+                            .expect("Failed to select ellipse") {
+                                el
+                            } else {
+                                node.query_selector(EQ_NODE_SHAPE).expect("Failed to select ellipse").unwrap()
+                            };
                         if selected_nodes.contains(&node_index) {
                             let _ = ellipse.set_attribute("stroke-width", "3");
                         } else {
@@ -282,10 +292,13 @@ pub fn graph(props: &GraphProps) -> Html {
                 let edges = div_el.get_elements_by_class_name("edge direct");
                 for i in 0..nodes.length() {
                     let node = nodes.item(i).unwrap();
-                    let ellipse = node
-                        .query_selector(NODE_SHAPE)
-                        .expect("Failed to select ellipse")
-                        .unwrap();
+                    let ellipse = if let Some(el) = node
+                        .query_selector(INST_NODE_SHAPE)
+                        .expect("Failed to select ellipse") {
+                            el
+                        } else {
+                            node.query_selector(EQ_NODE_SHAPE).expect("Failed to select ellipse").unwrap()
+                        };
                     let _ = ellipse.set_attribute("stroke-width", "1");
                 }
                 for i in 0..edges.length() {

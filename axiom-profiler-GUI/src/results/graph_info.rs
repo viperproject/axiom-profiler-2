@@ -3,7 +3,7 @@ use gloo::console::log;
 use indexmap::map::IndexMap;
 use material_yew::WeakComponentLink;
 use petgraph::graph::{EdgeIndex, NodeIndex};
-use smt_log_parser::parsers::z3::inst_graph::EdgeType;
+use smt_log_parser::parsers::z3::inst_graph::{EdgeType, NodeInfo};
 use smt_log_parser::{
     items::BlameKind,
     parsers::z3::{
@@ -19,7 +19,7 @@ use super::graph::graph_container::GraphContainer;
 
 pub struct GraphInfo {
     is_expanded_node: IndexMap<NodeIndex, bool>,
-    selected_nodes: IndexMap<NodeIndex, InstInfo>,
+    selected_nodes: IndexMap<NodeIndex, NodeInfo>,
     selected_nodes_ref: NodeRef,
     is_expanded_edge: IndexMap<EdgeIndex, bool>,
     selected_edges: IndexMap<EdgeIndex, EdgeInfo>,
@@ -42,11 +42,11 @@ pub enum Msg {
 #[derive(Properties, PartialEq)]
 pub struct GraphInfoProps {
     pub weak_link: WeakComponentLink<GraphInfo>,
-    pub node_info: Callback<(NodeIndex, bool, RcParser), InstInfo>,
+    pub node_info: Callback<(NodeIndex, bool, RcParser), NodeInfo>,
     pub edge_info: Callback<(EdgeIndex, bool, RcParser), EdgeInfo>,
     pub parser: RcParser,
     pub svg_text: AttrValue,
-    pub update_selected_nodes: Callback<Vec<InstInfo>>,
+    pub update_selected_nodes: Callback<Vec<NodeInfo>>,
 }
 
 impl Component for GraphInfo {
@@ -79,12 +79,12 @@ impl Component for GraphInfo {
                     self.selected_nodes.shift_remove(&node_index);
                     self.is_expanded_node.remove(&node_index);
                 } else {
-                    let inst_info = ctx.props().node_info.emit((
+                    let node_info = ctx.props().node_info.emit((
                         node_index,
                         self.ignore_term_ids,
                         ctx.props().parser.clone(),
                     ));
-                    self.selected_nodes.insert(node_index, inst_info);
+                    self.selected_nodes.insert(node_index, node_info);
                     // When adding a single new node,
                     // close all
                     for val in self.is_expanded_node.values_mut() {
@@ -97,7 +97,7 @@ impl Component for GraphInfo {
                     self.selected_nodes
                         .values()
                         .cloned()
-                        .collect::<Vec<InstInfo>>(),
+                        .collect::<Vec<NodeInfo>>(),
                 );
                 true
             }
@@ -143,7 +143,7 @@ impl Component for GraphInfo {
                     self.selected_nodes
                         .values()
                         .cloned()
-                        .collect::<Vec<InstInfo>>(),
+                        .collect::<Vec<NodeInfo>>(),
                 );
                 true
             }
@@ -163,14 +163,14 @@ impl Component for GraphInfo {
                     self.selected_nodes
                         .values()
                         .cloned()
-                        .collect::<Vec<InstInfo>>(),
+                        .collect::<Vec<NodeInfo>>(),
                 );
                 true
             }
             Msg::ToggleIgnoreTermIds => {
                 self.ignore_term_ids = !self.ignore_term_ids;
                 for node in self.selected_nodes.values_mut() {
-                    let node_idx = node.node_index;
+                    let node_idx = node.node_index();
                     let updated_node = ctx.props().node_info.emit((
                         node_idx,
                         self.ignore_term_ids,
@@ -262,7 +262,7 @@ impl Component for GraphInfo {
                 </div>
                 <h2>{"Information about selected nodes:"}</h2>
                 <div ref={self.selected_nodes_ref.clone()}>
-                    <SelectedNodesInfo selected_nodes={self.selected_nodes.values().cloned().collect::<Vec<InstInfo>>()} on_click={on_node_click} />
+                    <SelectedNodesInfo selected_nodes={self.selected_nodes.values().cloned().collect::<Vec<NodeInfo>>()} on_click={on_node_click} />
                 </div>
                 <h2>{"Information about selected dependencies:"}</h2>
                 <div ref={self.selected_edges_ref.clone()}>
@@ -281,7 +281,7 @@ impl Component for GraphInfo {
 
 #[derive(Properties, PartialEq)]
 struct SelectedNodesInfoProps {
-    selected_nodes: Vec<InstInfo>,
+    selected_nodes: Vec<NodeInfo>,
     on_click: Callback<NodeIndex>,
 }
 
@@ -294,36 +294,45 @@ fn selected_nodes_info(
 ) -> Html {
     selected_nodes
         .iter()
-        .map(|selected_inst| {
-            let get_ul = |label: &str, items: &Vec<String>| html! {
-                <>
-                    <h4>{label}</h4>
-                    <ul>{for items.iter().map(|item| html!{<li>{item}</li>})}</ul>
-                </>
-            };
-            let on_select = {
-                let on_click = on_click.clone();
-                let selected_inst = selected_inst.clone();
-                Callback::from(move |_| {
-                    on_click.emit(selected_inst.node_index)
-                })
-            };
-            let z3_gen = selected_inst.z3_gen.map(|gen| format!(", Z3 generation {gen}")).unwrap_or_default();
-            html! {
-            <details id={format!("{}", selected_inst.node_index.index())} onclick={on_select}>
-                <summary>{format!("Node {}", selected_inst.node_index.index())}</summary>
-                <ul>
-                    <li><h4>{"Instantiation number: "}</h4><p>{format!("{}", selected_inst.inst_idx)}</p></li>
-                    <li><h4>{"Cost: "}</h4><p>{"Calculated "}{selected_inst.cost}{z3_gen}</p></li>
-                    <li><h4>{"Instantiated formula: "}</h4><p>{&selected_inst.formula}</p></li>
-                    <li>{get_ul("Blamed terms: ", &selected_inst.blamed_terms)}</li>
-                    <li>{get_ul("Bound terms: ", &selected_inst.bound_terms)}</li>
-                    <li>{get_ul("Yield terms: ", &selected_inst.yields_terms)}</li>
-                    <li>{get_ul("Equality explanations: ", &selected_inst.equality_expls)}</li>
-                    <li><h4>{"Resulting term: "}</h4><p>{if let Some(ref val) = selected_inst.resulting_term {val.to_string()} else { String::new() }}</p></li>
-                </ul>
-            </details>
-        }})
+        .map(|selected_node| match selected_node {
+            NodeInfo::Inst(selected_inst) => {
+                    let get_ul = |label: &str, items: &Vec<String>| html! {
+                    <>
+                        <h4>{label}</h4>
+                        <ul>{for items.iter().map(|item| html!{<li>{item}</li>})}</ul>
+                    </>
+                };
+                let on_select = {
+                    let on_click = on_click.clone();
+                    let selected_inst = selected_inst.clone();
+                    Callback::from(move |_| {
+                        on_click.emit(selected_inst.node_index)
+                    })
+                };
+                let z3_gen = selected_inst.z3_gen.map(|gen| format!(", Z3 generation {gen}")).unwrap_or_default();
+                html! {
+                <details id={format!("{}", selected_inst.node_index.index())} onclick={on_select}>
+                    <summary>{format!("Node {}", selected_inst.node_index.index())}</summary>
+                    <ul>
+                        <li><h4>{"Instantiation number: "}</h4><p>{format!("{}", selected_inst.inst_idx)}</p></li>
+                        <li><h4>{"Cost: "}</h4><p>{"Calculated "}{selected_inst.cost}{z3_gen}</p></li>
+                        <li><h4>{"Instantiated formula: "}</h4><p>{&selected_inst.formula}</p></li>
+                        <li>{get_ul("Blamed terms: ", &selected_inst.blamed_terms)}</li>
+                        <li>{get_ul("Bound terms: ", &selected_inst.bound_terms)}</li>
+                        <li>{get_ul("Yield terms: ", &selected_inst.yields_terms)}</li>
+                        <li>{get_ul("Equality explanations: ", &selected_inst.equality_expls)}</li>
+                        <li><h4>{"Resulting term: "}</h4><p>{if let Some(ref val) = selected_inst.resulting_term {val.to_string()} else { String::new() }}</p></li>
+                    </ul>
+                </details>
+            }}
+            NodeInfo::Equality(selected_eq) => {
+                html! {
+                    <>
+                    <h4>{"Equality: "}</h4><p>{selected_eq.equality.clone()}</p>
+                    </>
+                }
+            }
+        })
         .collect()
 }
 
@@ -359,11 +368,11 @@ fn selected_edges_info(
                         <h4>{"Blame term: "}</h4><p>{selected_edge.blame_term.clone()}</p>
                         </div>
                     },
-                    BlameKind::Equality { .. } => html! {
-                        <div>
-                        <h4>{"Equality: "}</h4><p>{selected_edge.blame_term.clone()}</p>
-                        </div>
-                    },
+                    // BlameKind::Equality { .. } => html! {
+                    //     <div>
+                    //     <h4>{"Equality: "}</h4><p>{selected_edge.blame_term.clone()}</p>
+                    //     </div>
+                    // },
                     _ => html! {}
                 }}
             </details>

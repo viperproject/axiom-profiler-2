@@ -184,11 +184,15 @@ pub struct Instantiation {
     pub z3_generation: Option<u32>,
     pub cost: f32,
     pub yields_terms: Box<[ENodeIdx]>,
+    pub yields_equalities: Vec<(ENodeIdx, ENodeIdx)>,
 }
 
 impl Instantiation {
     pub fn get_resulting_term(&self) -> Option<TermIdx> {
         self.proof_id.as_ref()?.as_ref().ok().copied()
+    }
+    pub fn add_yield_eq(&mut self, from: ENodeIdx, to: ENodeIdx) {
+        self.yields_equalities.push((from, to))
     }
 }
 
@@ -196,25 +200,28 @@ impl Instantiation {
 pub struct Match {
     pub kind: MatchKind,
     pub blamed: Box<[BlameKind]>,
+    pub blamed_eqs: Vec<(ENodeIdx, ENodeIdx)>,
 }
 
 impl Match {
-    pub fn due_to_enodes(&self) -> impl Iterator<Item = (&BlameKind, ENodeIdx)> + '_ {
-        self.blamed
-            .iter()
-            .filter_map(|x| x.get_blame_node().map(|b| (x, b)))
-    }
-    pub fn due_to_terms(&self) -> impl Iterator<Item = ENodeIdx> + '_ {
+    // pub fn due_to_enodes(&self) -> impl Iterator<Item = (&BlameKind, ENodeIdx)> + '_ {
+    //     self.blamed
+    //         .iter()
+    //         .filter_map(|x| x.get_blame_node().map(|b| (x, b)))
+    // }
+    pub fn due_to_terms(&self) -> impl Iterator<Item = (&BlameKind, ENodeIdx)> + '_ {
         self.blamed.iter().filter_map(|x| match x {
-            BlameKind::Term { term } => Some(*term),
+            BlameKind::Term { term } => Some((x, *term)),
             _ => None,
         })
     }
-    pub fn due_to_equalities(&self) -> impl Iterator<Item = ENodeIdx> + '_ {
-        self.blamed.iter().filter_map(|x| match x {
-            BlameKind::Equality { eq } => Some(*eq),
-            _ => None,
-        })
+    pub fn due_to_equalities(&self) -> impl Iterator<Item = &(ENodeIdx, ENodeIdx)> + '_ {
+        self.blamed_eqs.iter()
+        // self.blamed.iter().filter_map(|x| match x {
+        //     // BlameKind::Equality { eq } => Some(*eq),
+        //     BlameKind::Equality { from, to } => Some((*from, *to)),
+        //     _ => None,
+        // })
     }
 }
 
@@ -290,7 +297,9 @@ impl MatchKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BlameKind {
     Term { term: ENodeIdx },
-    Equality { eq: ENodeIdx },
+    // Equality { eq: ENodeIdx },
+    // Equality { from: ENodeIdx, to: ENodeIdx },
+    Equality,
     // TODO: why aren't all equalities explained by a prior `eq-expl`?
     UnknownEquality { from: ENodeIdx, to: ENodeIdx },
 }
@@ -299,8 +308,10 @@ impl BlameKind {
     pub fn get_blame_node(&self) -> Option<ENodeIdx> {
         match self {
             Self::Term { term } => Some(*term),
-            Self::Equality { eq } => Some(*eq),
-            Self::UnknownEquality { .. } => None,
+            _ => None,
+            // Self::Equality { eq } => Some(*eq),
+            // Self::Equality { from, to } => Some(*from),
+            // Self::UnknownEquality { .. } => None,
         }
     }
 }
