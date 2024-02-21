@@ -1,10 +1,10 @@
 use super::node_actions::NodeActions;
 use crate::{utils::usize_input::UsizeInput, results::svg_result::DEFAULT_NODE_COUNT};
 use gloo::console::log;
-use petgraph::{stable_graph::NodeIndex, Direction};
+use petgraph::{stable_graph::NodeIndex, Direction, Graph};
 use smt_log_parser::{
     items::QuantIdx,
-    parsers::z3::inst_graph::{InstGraph, InstInfo, NodeData}, Z3Parser,
+    parsers::z3::inst_graph::{InstGraph, InstInfo, NodeData, InstOrEquality}, Z3Parser,
 };
 use std::fmt::Display;
 use yew::prelude::*;
@@ -24,6 +24,8 @@ pub enum Filter {
     ShowLongestPath(NodeIndex),
     SelectNthMatchingLoop(usize),
     ShowMatchingLoopSubgraph,
+    AnalyzeMatchingLoopWithEndNode(NodeIndex),
+    ShowMatchingLoopGraph,
 }
 
 impl Display for Filter {
@@ -75,13 +77,16 @@ impl Display for Filter {
             Self::ShowMatchingLoopSubgraph => {
                 write!(f, "Showing all potential matching loops")
             }
+            Self::AnalyzeMatchingLoopWithEndNode(node) => write!(f, "Analyzing potential matching loop with end-node {}", node.index()),
+            Self::ShowMatchingLoopGraph => write!(f, "Showing matching loop graph of currently visible graph"),
         }
     }
 }
 
 pub enum FilterOutput {
     LongestPath(Vec<NodeIndex>),
-    MatchingLoopGeneralizedTerms(Vec<String>),
+    // MatchingLoopGeneralizedTerms(Vec<String>),
+    MatchingLoopGraph(Graph<String, InstOrEquality>),
     None
 }
 
@@ -99,8 +104,10 @@ impl Filter {
             Filter::VisitSourceTree(nidx, retain) => graph.visit_ancestors(nidx, retain),
             Filter::MaxDepth(depth) => graph.retain_nodes(|node: &NodeData| node.min_depth.unwrap() <= depth),
             Filter::ShowLongestPath(nidx) => return FilterOutput::LongestPath(graph.show_longest_path_through(nidx)),
-            Filter::SelectNthMatchingLoop(n) => return FilterOutput::MatchingLoopGeneralizedTerms(graph.show_nth_matching_loop(n, parser)),
+            Filter::SelectNthMatchingLoop(n) => return FilterOutput::MatchingLoopGraph(graph.show_nth_matching_loop(n, parser)),
             Filter::ShowMatchingLoopSubgraph => graph.show_matching_loop_subgraph(),
+            Filter::AnalyzeMatchingLoopWithEndNode(endnode) => return FilterOutput::MatchingLoopGraph(graph.analyze_matching_loop_with_endnode(endnode, parser)),
+            Filter::ShowMatchingLoopGraph => return FilterOutput::MatchingLoopGraph(graph.show_matching_loop_graph_of_visible_graph(parser)),
         }
         FilterOutput::None
     }
@@ -158,7 +165,6 @@ impl Component for GraphFilters {
     }
 
     fn create(ctx: &Context<Self>) -> Self {
-        log!("Creating GraphFilters component");
         let (selected_insts, _selected_insts_listener) = ctx
             .link()
             .context(ctx.link().callback(Msg::SelectedInstsUpdated))
@@ -196,6 +202,10 @@ impl Component for GraphFilters {
             let callback = ctx.props().add_filters.clone();
             let max_depth = self.max_depth;
             Callback::from(move |_| callback.emit(vec![Filter::MaxDepth(max_depth)]))
+        };
+        let matching_loop_graph = {
+            let callback = ctx.props().add_filters.clone();
+            Callback::from(move |_| callback.emit(vec![Filter::ShowMatchingLoopGraph]))
         };
         html! {
             <div>
@@ -235,6 +245,10 @@ impl Component for GraphFilters {
                         set_value={ctx.link().callback(Msg::SetMaxDepth)}
                     />
                     <button onclick={add_max_depth_filter}>{"Add"}</button>
+                </div>
+                <div>
+                    <label for="matching_loop_graph">{"Generate matching loop graph"}</label>
+                    <button onclick={matching_loop_graph} id="matching_loop_graph">{"Add"}</button>
                 </div>
                 {if !self.selected_insts.is_empty() {
                     html! {

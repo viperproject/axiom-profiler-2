@@ -19,7 +19,7 @@ use smt_log_parser::{
     items::{BlameKind, MatchKind},
     parsers::{
         z3::{
-            inst_graph::{EdgeInfo, EdgeType, InstGraph, InstInfo, VisibleGraphInfo},
+            inst_graph::{EdgeInfo, EdgeType, InstGraph, InstInfo, VisibleGraphInfo, InstOrEquality},
             z3parser::Z3Parser,
         },
         LogParser,
@@ -27,7 +27,7 @@ use smt_log_parser::{
 };
 use std::num::NonZeroUsize;
 use viz_js::VizInstance;
-use web_sys::window;
+use web_sys::{window, Performance, Window};
 use yew::prelude::*;
 
 pub const EDGE_LIMIT: usize = 2000;
@@ -79,6 +79,7 @@ pub struct SVGResult {
     selected_insts: Vec<InstInfo>,
     searched_matching_loops: bool,
     matching_loop_count: usize,
+    performance: Performance, 
 }
 
 #[derive(Properties, PartialEq)]
@@ -91,9 +92,14 @@ impl Component for SVGResult {
     type Properties = SVGProps;
 
     fn create(ctx: &Context<Self>) -> Self {
-        log::debug!("Creating SVGResult component");
         let parser = RcParser::clone(&ctx.props().parser);
+        let window = window().expect("should have a window in this context");
+        let performance = window.performance().expect("should have a performance object");
+        let start_timestamp = performance.now();
         let inst_graph = InstGraph::from(&parser.borrow());
+        let end_timestamp = performance.now();
+        let elapsed_seconds = (end_timestamp - start_timestamp) / 1000.0;
+        log::info!("Constructing the instantiation graph took {} seconds", elapsed_seconds);
         let (quant_count, non_quant_insts) = parser.borrow().quant_count_incl_theory_solving();
         let colour_map = QuantIdxToColourMap::from(quant_count, non_quant_insts);
         let get_node_info = Callback::from({
@@ -126,6 +132,7 @@ impl Component for SVGResult {
             selected_insts: Vec::new(),
             searched_matching_loops: false,
             matching_loop_count: 0,
+            performance,
         }
     }
 
@@ -133,8 +140,12 @@ impl Component for SVGResult {
         match msg {
             Msg::WorkerOutput(_out) => false,
             Msg::ApplyFilter(filter) => {
-                log::debug!("Applying filter {}", filter);
-                match filter.apply(&mut self.inst_graph, &mut self.parser.borrow_mut()) {
+                let start_timestamp = self.performance.now();
+                let filter_output = filter.apply(&mut self.inst_graph, &mut self.parser.borrow_mut());
+                let end_timestamp = self.performance.now();
+                let elapsed_seconds = (end_timestamp - start_timestamp) / 1000.0;
+                log::info!("Applying filter took {} seconds", elapsed_seconds);
+                match filter_output {
                     FilterOutput::LongestPath(path) => {
                         self.insts_info_link
                             .borrow()
@@ -143,19 +154,66 @@ impl Component for SVGResult {
                             .send_message(GraphInfoMsg::SelectNodes(path));
                         false
                     }
-                    FilterOutput::MatchingLoopGeneralizedTerms(gen_terms) => {
-                        self.insts_info_link
-                            .borrow()
-                            .clone()
-                            .unwrap()
-                            .send_message(GraphInfoMsg::ShowGeneralizedTerms(gen_terms));
+                    FilterOutput::MatchingLoopGraph(graph) => {
+                        let settings = [
+                            "ranksep=1.0;",
+                            "splines=true;",
+                            "nslimit=6;",
+                            "mclimit=0.6;",
+                        ];
+                        // let dot_output = format!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]));
+                        let dot_output = format!(
+                            "digraph {{\n{}\n{:?}\n}}",
+                            settings.join("\n"),
+                            Dot::with_attr_getters(
+                                &graph,
+                                &[
+                                    Config::EdgeNoLabel,
+                                    Config::NodeNoLabel,
+                                    Config::GraphContentOnly
+                                ],
+                                &|_, edge_data| format!(
+                                    "label=\"{}\" style=\"{}\" color=\"{}\"",
+                                    edge_data.weight(),
+                                    match edge_data.weight() {
+                                        InstOrEquality::Inst(_, _) => "solid, bold",
+                                        InstOrEquality::Equality => "solid",
+                                    },
+                                    match edge_data.weight() {
+                                        InstOrEquality::Inst(_, mkind) => format!("{}", self.colour_map.get(&mkind, NODE_COLOUR_SATURATION + 0.2)),
+                                        InstOrEquality::Equality => "black:white:black".to_string(),
+                                    }
+                                ),
+                                &|_, (_, node_data)| {
+                                    format!("label=\"{}\" shape=\"{}\"",
+                                            node_data,
+                                            "box",
+                                        )
+                                },
+                            )
+                        );
+                        let link = self.insts_info_link.borrow().clone().unwrap();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let graphviz = VizInstance::new().await;
+                            let options = viz_js::Options::default();
+                            // options.engine = "twopi".to_string();
+                            let svg = graphviz
+                                .render_svg_element(dot_output, options)
+                                .expect("Could not render graphviz");
+                            let svg_text = svg.outer_html();
+                            link.send_message(GraphInfoMsg::ShowMatchingLoopGraph(AttrValue::from(svg_text)));
+                        });
                         false
                     }
                     FilterOutput::None => false
                 }
             }
             Msg::SearchMatchingLoops => {
+                let start_timestamp = self.performance.now();
                 self.matching_loop_count = self.inst_graph.search_matching_loops();
+                let end_timestamp = self.performance.now();
+                let elapsed_seconds = (end_timestamp - start_timestamp) / 1000.0;
+                log::info!("Matching loop search took {} seconds", elapsed_seconds);
                 self.searched_matching_loops = true;
                 ctx.link().send_message(Msg::SelectNthMatchingLoop(0));
                 true
@@ -177,18 +235,20 @@ impl Component for SVGResult {
                 false
             }
             Msg::ResetGraph => {
-                log::debug!("Resetting graph");
                 self.inst_graph.reset_visibility_to(true);
                 false
             }
             Msg::RenderGraph(UserPermission { permission }) => {
+                let start_timestamp = self.performance.now();
                 let VisibleGraphInfo {
                     node_count,
                     edge_count,
                     node_count_decreased,
                     edge_count_decreased,
                 } = self.inst_graph.retain_visible_nodes_and_reconnect();
-                log::debug!("The current node count is {}", node_count);
+                let end_timestamp = self.performance.now();
+                let elapsed_seconds = (end_timestamp - start_timestamp) / 1000.0;
+                log::info!("Reconnecting algorithm took {} seconds", elapsed_seconds);
                 self.graph_dim.node_count = node_count;
                 self.graph_dim.edge_count = edge_count;
                 let safe_to_render = edge_count <= EDGE_LIMIT
@@ -197,7 +257,6 @@ impl Component for SVGResult {
                     || node_count_decreased;
                 if safe_to_render || permission {
                     self.async_graph_and_filter_chain = false;
-                    log::debug!("Rendering graph");
                     let filtered_graph = &self.inst_graph.visible_graph;
 
                     // Performance observations (default value is in [])
@@ -213,6 +272,7 @@ impl Component for SVGResult {
                         "nslimit=6;",
                         "mclimit=0.6;",
                     ];
+                    let start_timestamp = self.performance.now();
                     let dot_output = format!(
                         "digraph {{\n{}\n{:?}\n}}",
                         settings.join("\n"),
@@ -270,15 +330,23 @@ impl Component for SVGResult {
                             },
                         )
                     );
-                    log::debug!("Finished building dot output");
+                    let end_timestamp = self.performance.now();
+                    let elapsed_seconds = (end_timestamp - start_timestamp) / 1000.0;
+                    log::info!("Computing dot-String from petgraph algorithm took {} seconds", elapsed_seconds);
                     let link = ctx.link().clone();
                     wasm_bindgen_futures::spawn_local(async move {
                         let graphviz = VizInstance::new().await;
                         let options = viz_js::Options::default();
                         // options.engine = "twopi".to_string();
+                        let window = window().expect("should have a window in this context");
+                        let performance = window.performance().expect("should have a performance object");
+                        let start_timestamp = performance.now();
                         let svg = graphviz
                             .render_svg_element(dot_output, options)
                             .expect("Could not render graphviz");
+                        let end_timestamp = performance.now();
+                        let elapsed_seconds = (end_timestamp - start_timestamp) / 1000.0;
+                        log::info!("Converting dot-String to SVG took {} seconds", elapsed_seconds);
                         let svg_text = svg.outer_html();
                         link.send_message(Msg::UpdateSvgText(
                             AttrValue::from(svg_text),
@@ -293,7 +361,6 @@ impl Component for SVGResult {
                 }
             }
             Msg::GetUserPermission => {
-                log::debug!("Getting user permission");
                 let window = window().unwrap();
                 let node_count = self.graph_dim.node_count.to_formatted_string(&Locale::en);
                 let edge_count = self.graph_dim.edge_count.to_formatted_string(&Locale::en);
@@ -302,13 +369,11 @@ impl Component for SVGResult {
                 match result {
                     Ok(true) => {
                         // if the user wishes to render the current graph, we do so
-                        log::debug!("Got user permission");
                         ctx.link()
                             .send_message(Msg::RenderGraph(UserPermission::from(true)));
                         false
                     }
                     Ok(false) => {
-                        log::debug!("Didn't get user permission");
                         // this resets the filter chain to the filter chain that we had
                         // right before adding the filter that caused too many nodes
                         // to be added to the graph
@@ -337,7 +402,6 @@ impl Component for SVGResult {
                 }
             }
             Msg::UpdateSvgText(svg_text, node_count_decreased) => {
-                log::debug!("Updating svg text");
                 if svg_text != self.svg_text {
                     self.svg_text = svg_text;
                     // only if some nodes were deleted, do we deselect all previously selected nodes
@@ -380,7 +444,7 @@ impl Component for SVGResult {
                     html! {
                         <button onclick={ctx.link().callback(|_| Msg::SearchMatchingLoops)}>{"Search matching loops"}</button>
                     }
-                } else {
+                } else if self.matching_loop_count > 0 {
                     html! {
                         <>
                         <Indexer 
@@ -390,6 +454,10 @@ impl Component for SVGResult {
                         />
                         <button onclick={ctx.link().callback(|_| Msg::ShowMatchingLoopSubgraph)}>{"Show all matching loops"}</button>
                         </>
+                    }
+                } else {
+                    html! {
+                        <p>{"No matching loops have been found."}</p>
                     }
                 }}
                 <ContextProvider<Vec<InstInfo>> context={self.selected_insts.clone()}>
@@ -483,10 +551,17 @@ impl QuantIdxToColourMap {
         let nz = NonZeroUsize::new(n);
         if let Some(nz) = nz {
             // according to prime number theorem, the number of primes less than or equal to N is roughly N/ln(N)
-            let nr_primes_smaller_than_n = n as f64 / f64::ln(n as f64);
+            // hence there are roughly (N/2)/ln(N/2) primes between 0 and N/2. So, to get a prime that's 
+            // "halfway" between 0 and N we can skip the first ceil((N/2)/ln(N/2)) primes
+            // let nr_primes_smaller_than_n = n as f64 / f64::ln(n as f64);
+            let nr_primes_to_skip = if n <= 2 {
+                0
+            } else {
+                (n as f64 / 2.0 / f64::ln(n as f64 / 2.0)).floor() as usize
+            };
             primal::Primes::all()
                 // Start from "middle prime" smaller than n since both the very large and very small ones don't permute so nicely.
-                .skip((nr_primes_smaller_than_n / 2.0).ceil() as usize)
+                .skip(nr_primes_to_skip)
                 // SAFETY: returned primes will never be zero.
                 .map(|p| unsafe { NonZeroUsize::new_unchecked(p) })
                 // Find the first prime that is coprime to `nz`.

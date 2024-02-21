@@ -13,7 +13,7 @@ use smt_log_parser::{
 };
 use std::rc::Rc;
 use web_sys::HtmlElement;
-use yew::prelude::*;
+use yew::{prelude::*, virtual_dom::VNode};
 
 use super::graph::graph_container::GraphContainer;
 
@@ -25,7 +25,7 @@ pub struct GraphInfo {
     selected_edges: IndexMap<EdgeIndex, EdgeInfo>,
     selected_edges_ref: NodeRef,
     ignore_term_ids: bool,
-    generalized_terms: Vec<String>,
+    matching_loop_graph: VNode,
 }
 
 pub enum Msg {
@@ -36,7 +36,7 @@ pub enum Msg {
     SelectNodes(Vec<NodeIndex>),
     DeselectAll,
     ToggleIgnoreTermIds,
-    ShowGeneralizedTerms(Vec<String>),
+    ShowMatchingLoopGraph(AttrValue),
 }
 
 #[derive(Properties, PartialEq)]
@@ -67,7 +67,7 @@ impl Component for GraphInfo {
             selected_edges: IndexMap::new(),
             selected_edges_ref: NodeRef::default(),
             ignore_term_ids: true,
-            generalized_terms: Vec::new(),
+            matching_loop_graph: VNode::default(),
         }
     }
 
@@ -134,7 +134,6 @@ impl Component for GraphInfo {
                 false
             }
             Msg::DeselectAll => {
-                log!(format!("Deselecting all selected nodes"));
                 self.selected_nodes.clear();
                 self.is_expanded_node.clear();
                 self.selected_edges.clear();
@@ -189,25 +188,22 @@ impl Component for GraphInfo {
                 }
                 true
             }
-            Msg::ShowGeneralizedTerms(terms) => {
-                self.generalized_terms = terms;
+            Msg::ShowMatchingLoopGraph(graph) => {
+                self.matching_loop_graph = Html::from_html_unchecked(graph);
                 true
             }
         }
     }
 
     fn rendered(&mut self, _ctx: &Context<Self>, _first_render: bool) {
-        log!("Rendered details");
         let selected_nodes_details = self
             .selected_nodes_ref
             .cast::<HtmlElement>()
             .expect("not attached to div element");
         let node_details = selected_nodes_details.get_elements_by_tag_name("details");
         for i in 0..node_details.length() {
-            log!(format!("There are {} nodes", node_details.length()));
             let node_detail = node_details.item(i).unwrap();
             let node_id = node_detail.id().parse::<usize>().unwrap();
-            log!(format!("node_details contains node {}", node_id));
             if *self.is_expanded_node.get(&NodeIndex::new(node_id)).unwrap() {
                 let _ = node_detail.set_attribute("open", "true");
             } else {
@@ -243,9 +239,6 @@ impl Component for GraphInfo {
         let on_node_select = ctx.link().callback(Msg::UserSelectedNode);
         let on_edge_select = ctx.link().callback(Msg::UserSelectedEdge);
         let deselect_all = ctx.link().callback(|_| Msg::DeselectAll);
-        let generalized_terms = self.generalized_terms.iter().map(|term| html! {
-            <li>{term}</li>
-        });
         html! {
             <>
             <GraphContainer
@@ -269,8 +262,8 @@ impl Component for GraphInfo {
                     <SelectedEdgesInfo selected_edges={self.selected_edges.values().cloned().collect::<Vec<EdgeInfo>>()} on_click={on_edge_click} />
                 </div>
                 <h2>{"Information about displayed matching loop:"}</h2>
-                <div>
-                    <ul>{for generalized_terms}</ul>
+                <div style="overflow: auto;">
+                    {self.matching_loop_graph.clone()}
                 </div>
             </div>
 
@@ -298,7 +291,7 @@ fn selected_nodes_info(
             let get_ul = |label: &str, items: &Vec<String>| html! {
                 <>
                     <h4>{label}</h4>
-                    <ul>{for items.iter().map(|item| html!{<li>{item}</li>})}</ul>
+                    <ul style="overflow: auto;">{for items.iter().map(|item| html!{<li>{item}</li>})}</ul>
                 </>
             };
             let on_select = {
@@ -315,12 +308,13 @@ fn selected_nodes_info(
                 <ul>
                     <li><h4>{"Instantiation number: "}</h4><p>{format!("{}", selected_inst.inst_idx)}</p></li>
                     <li><h4>{"Cost: "}</h4><p>{"Calculated "}{selected_inst.cost}{z3_gen}</p></li>
-                    <li><h4>{"Instantiated formula: "}</h4><p>{&selected_inst.formula}</p></li>
+                    <li><h4>{"Instantiated formula: "}</h4><p style="overflow: auto;">{&selected_inst.formula}</p></li>
+                    <li><h4>{"Quantifier: "}</h4><p style="overflow: auto;">{if let Some(ref quant) = selected_inst.quant {format!("q{}", quant)} else { String::new() }}</p></li>
                     <li>{get_ul("Blamed terms: ", &selected_inst.blamed_terms)}</li>
                     <li>{get_ul("Bound terms: ", &selected_inst.bound_terms)}</li>
                     <li>{get_ul("Yield terms: ", &selected_inst.yields_terms)}</li>
                     <li>{get_ul("Equality explanations: ", &selected_inst.equality_expls)}</li>
-                    <li><h4>{"Resulting term: "}</h4><p>{if let Some(ref val) = selected_inst.resulting_term {val.to_string()} else { String::new() }}</p></li>
+                    <li><h4>{"Resulting term: "}</h4><p style="overflow: auto;">{if let Some(ref val) = selected_inst.resulting_term {val.to_string()} else { String::new() }}</p></li>
                 </ul>
             </details>
         }})
@@ -356,12 +350,12 @@ fn selected_edges_info(
                 {match selected_edge.edge_data {
                     BlameKind::Term { .. } => html! {
                         <div>
-                        <h4>{"Blame term: "}</h4><p>{selected_edge.blame_term.clone()}</p>
+                        <h4>{"Blame term: "}</h4><p style="overflow: auto;">{selected_edge.blame_term.clone()}</p>
                         </div>
                     },
                     BlameKind::Equality { .. } => html! {
                         <div>
-                        <h4>{"Equality: "}</h4><p>{selected_edge.blame_term.clone()}</p>
+                        <h4>{"Equality: "}</h4><p style="overflow: auto;">{selected_edge.blame_term.clone()}</p>
                         </div>
                     },
                     _ => html! {}
