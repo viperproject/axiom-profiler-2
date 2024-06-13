@@ -45,6 +45,7 @@ idx!(MatchIdx, "m{}");
 idx!(EqGivenIdx, "≡{}");
 idx!(EqTransIdx, "={}");
 idx!(GraphIdx, "g{}");
+idx!(ProofIdx, "p{}");
 
 /// A Z3 term and associated data.
 #[cfg_attr(feature = "mem_dbg", derive(MemSize, MemDbg))]
@@ -95,6 +96,15 @@ impl TermKind {
         match self {
             Self::ProofOrApp(ProofOrApp {
                 is_proof: false,
+                name,
+            }) => Some(*name),
+            _ => None,
+        }
+    }
+    pub fn ps_name(&self) -> Option<IString> {
+        match self {
+            Self::ProofOrApp(ProofOrApp {
+                is_proof: true,
                 name,
             }) => Some(*name),
             _ => None,
@@ -688,4 +698,15 @@ impl TransitiveExplSegmentKind {
             _ => None,
         }
     }
+}
+
+/// A Z3 proof step and associated data.
+#[cfg_attr(feature = "mem_dbg", derive(MemSize, MemDbg))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug)]
+pub struct ProofStep {
+    pub id: Option<TermId>,
+    pub name: IString,
+    pub result: TermIdx,
+    pub prerequisites: Box<[ProofIdx]>,
 }
