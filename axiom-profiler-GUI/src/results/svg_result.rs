@@ -31,7 +31,7 @@ use smt_log_parser::{
     items::QuantIdx,
     NonMaxU32,
 };
-use std::{cell::RefCell, num::NonZeroUsize, rc::Rc};
+use std::{cell::RefCell, num::NonZeroUsize, rc::{self, Rc}};
 use viz_js::VizInstance;
 use web_sys::window;
 use yew::prelude::*;
@@ -379,8 +379,15 @@ impl Component for SVGResult {
                                     }
                                     _ => "normal",
                                 };
+                                let label = match inst_graph.raw[fg[edge_data.target()].idx].kind() {
+                                    NodeKind::Decision(dec_idx) => {
+                                        let search_path = rc_parser.parser.borrow()[*dec_idx].search_path;
+                                        format!("label={}", search_path)
+                                    },
+                                    _ => "".to_string(),
+                                };
                                 format!(
-                                    "id=edge_{} tooltip=\"{tooltip}\" style={style} class={class} arrowhead={arrowhead}",
+                                    "id=edge_{} tooltip=\"{tooltip}\" style={style} class={class} arrowhead={arrowhead} {label}",
                                     // For edges the `id` is the `VisibleEdgeIndex` from the VisibleGraph!
                                     edge_data.id().index(),
                                 )
@@ -422,6 +429,11 @@ impl Component for SVGResult {
                                     }
                                     NodeKind::ENode(..) => {
                                         fillcolor = Some("lightgrey".to_string());
+                                    }
+                                    NodeKind::Decision(dec_idx) => {
+                                        if rc_parser.parser.borrow()[*dec_idx].results_in_conflict {
+                                            fillcolor = Some("red".to_string());
+                                        }
                                     }
                                     _ => (),
                                 };

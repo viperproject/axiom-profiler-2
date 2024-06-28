@@ -249,6 +249,47 @@ impl DisplayWithCtxt<DisplayCtxt<'_>, Option<QuantIdx>> for TermIdx {
     }
 }
 
+impl DisplayWithCtxt<DisplayCtxt<'_>, ()> for ProofIdx {
+    fn fmt_with(
+        self,
+        f: &mut fmt::Formatter<'_>,
+        ctxt: &DisplayCtxt<'_>,
+        _data: &mut (),
+    ) -> fmt::Result {
+        let ps_result = ctxt.parser[self].result;
+        write!(f, "{}", ps_result.with(ctxt))
+    }
+}
+impl DisplayWithCtxt<DisplayCtxt<'_>, ()> for DecisionIdx {
+    fn fmt_with(
+        self,
+        f: &mut fmt::Formatter<'_>,
+        ctxt: &DisplayCtxt<'_>,
+        _data: &mut (),
+    ) -> fmt::Result {
+        let dec = &ctxt.parser[self];
+        // write!(f, "{} → {}", dec.result.with(ctxt), dec.assignment)
+        write!(f, "{} → {}", dec.result.to_string(), dec.assignment)
+        // if let Some(enode_char_limit) = ctxt.config.enode_char_limit {
+        //     log!("Before computing owner");
+        //     let owner = ctxt.parser[self]
+        //         .result
+        //         .with_data(ctxt, &mut None)
+        //         .to_string();
+        //     if owner.len() <= enode_char_limit.get() as usize {
+        //         log!("In non-trimming branch");
+        //         write!(f, "{owner}")
+        //     } else {
+        //         log!("Trimming Decision-term");
+        //         write!(f, "{}...", &owner[..enode_char_limit.get() as usize - 3])
+        //     }
+        // } else {
+        //     log!("In else-branch");
+        //     ctxt.parser[self].result.fmt_with(f, ctxt, &mut None)
+        // }
+    }
+}
+
 impl DisplayWithCtxt<DisplayCtxt<'_>, ()> for ENodeIdx {
     fn fmt_with(
         self,

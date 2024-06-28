@@ -4,11 +4,15 @@ mod manage_filter;
 use std::fmt::Display;
 
 use material_yew::icon::MatIcon;
+use material_yew::list::{MatListItem, SelectedDetail};
+use material_yew::select::{ListIndex::Single, MatSelect};
 use petgraph::Direction;
 use smt_log_parser::analysis::{raw::NodeKind, RawNodeIndex};
 use smt_log_parser::parsers::ParseState;
 use yew::{html, Callback, Component, Context, Html, MouseEvent, NodeRef, Properties};
 
+use crate::results::filters::{CDCL_DISABLER_CHAIN, ONLY_PROOF_STEPS_DISABLER_CHAIN, PROOF_STEPS_DISABLER_CHAIN};
+use crate::state::ViewerMode;
 use crate::{
     filters::{
         add_filter::AddFilterSidebar,
@@ -46,14 +50,15 @@ pub enum Msg {
     EndEdit(usize, Filter),
     AddFilter(bool, Filter),
     ToggleDisabler(usize),
-    ToggleMlViewerMode,
+    SwitchViewerMode(ViewerMode),
+    // DisableAllButProofSteps,
 }
 
 pub struct FiltersState {
     dragging: bool,
     delete_node: NodeRef,
     will_delete: bool,
-    disabler_chain: Vec<(Disabler, bool)>,
+    disabler_chain: Vec<(Disabler, bool, bool)>,
     filter_chain: Vec<Filter>,
     applied_filter_chain: Vec<Filter>,
     prev_filter_chain: Vec<Filter>,
@@ -85,8 +90,8 @@ impl FiltersState {
         let msg = SVGMsg::SetDisabled(
             self.disabler_chain
                 .iter()
-                .filter(|&(_d, b)| *b)
-                .map(|(d, _b)| *d)
+                .filter(|&(_d, b, _)| *b)
+                .map(|(d, _b, _)| *d)
                 .collect(),
         );
         let msgs = self.rerender_msgs();
@@ -227,13 +232,28 @@ impl Component for FiltersState {
                 self.reset_disabled(&ctx.props().file);
                 false
             }
-            Msg::ToggleMlViewerMode => {
+            Msg::SwitchViewerMode(viewer_mode) => {
                 let state = ctx.link().get_state().unwrap();
                 let found_mls = &state.state.parser.as_ref().unwrap().found_mls;
                 if found_mls.is_none() {
                     ctx.props().search_matching_loops.emit(());
                 }
-                state.set_ml_viewer_mode(!state.state.ml_viewer_mode);
+                state.set_viewer_mode(viewer_mode);
+                match viewer_mode {
+                    ViewerMode::QuantifierInstantiations | ViewerMode::MatchingLoops => {
+                        self.disabler_chain = DEFAULT_DISABLER_CHAIN.to_vec()
+                    }
+                    ViewerMode::ProofSteps => {
+                        self.disabler_chain = PROOF_STEPS_DISABLER_CHAIN.to_vec()
+                    }
+                    ViewerMode::OnlyProofSteps => {
+                        self.disabler_chain = ONLY_PROOF_STEPS_DISABLER_CHAIN.to_vec()
+                    }
+                    ViewerMode::CDCL => {
+                        self.disabler_chain = CDCL_DISABLER_CHAIN.to_vec()
+                    }
+                }
+                self.reset_disabled(&ctx.props().file);
                 true
             }
         }
@@ -268,19 +288,6 @@ impl Component for FiltersState {
 
         let state = ctx.link().get_state().unwrap();
         let found_mls = &state.state.parser.as_ref().unwrap().found_mls;
-        let toggle_ml_viewer_mode = ctx.link().callback(|ev: MouseEvent| {
-            ev.prevent_default();
-            Msg::ToggleMlViewerMode
-        });
-        let ml_viewer_mode = if state.state.ml_viewer_mode {
-            html! {
-                <li><a draggable="false" href="#" onclick={toggle_ml_viewer_mode}><div class="material-icons"><MatIcon>{"close"}</MatIcon></div>{"Exit matching loop viewer"}</a></li>
-            }
-        } else {
-            html! {
-                <li><a draggable="false" href="#" onclick={toggle_ml_viewer_mode}><div class="material-icons"><MatIcon>{"loop"}</MatIcon></div>{"View likely matching loops"}</a></li>
-            }
-        };
         let reset = ctx.link().callback(|e: MouseEvent| {
             e.prevent_default();
             Msg::ResetOperations
@@ -301,26 +308,30 @@ impl Component for FiltersState {
 
         // Selected nodes
         let selected_nodes = !ctx.props().file.selected_nodes.is_empty();
-        let selected_nodes =
-            (selected_nodes && !ctx.link().get_state().unwrap().state.ml_viewer_mode).then(|| {
-                let new_filter = ctx.link().callback(|f| Msg::AddFilter(false, f));
-                let nodes = ctx.props().file.selected_nodes.clone();
-                let header = format!(
-                    "Selected {} Node{}",
-                    nodes.len(),
-                    if nodes.len() == 1 { "" } else { "s" }
-                );
-                let collapsed_text = format!(
-                    "Actions on the {} selected node{}",
-                    nodes.len(),
-                    if nodes.len() == 1 { "" } else { "s" }
-                );
-                html! {
-                    <SidebarSectionHeader header_text={header} collapsed_text={collapsed_text}><ul>
-                        <AddFilterSidebar {new_filter} {nodes} general_filters={false}/>
-                    </ul></SidebarSectionHeader>
-                }
-            });
+        let selected_nodes = (selected_nodes
+            && !matches!(
+                ctx.link().get_state().unwrap().state.viewer_mode,
+                ViewerMode::MatchingLoops
+            ))
+        .then(|| {
+            let new_filter = ctx.link().callback(|f| Msg::AddFilter(false, f));
+            let nodes = ctx.props().file.selected_nodes.clone();
+            let header = format!(
+                "Selected {} Node{}",
+                nodes.len(),
+                if nodes.len() == 1 { "" } else { "s" }
+            );
+            let collapsed_text = format!(
+                "Actions on the {} selected node{}",
+                nodes.len(),
+                if nodes.len() == 1 { "" } else { "s" }
+            );
+            html! {
+                <SidebarSectionHeader header_text={header} collapsed_text={collapsed_text}><ul>
+                    <AddFilterSidebar {new_filter} {nodes} general_filters={false}/>
+                </ul></SidebarSectionHeader>
+            }
+        });
 
         // Operations
         let class = match (self.dragging, self.will_delete) {
@@ -342,32 +353,72 @@ impl Component for FiltersState {
         });
         // Disablers
         let toggle = ctx.link().callback(Msg::ToggleDisabler);
-        let selected: Vec<_> = DEFAULT_DISABLER_CHAIN.iter().map(|(_, b)| *b).collect();
-        let disablers = self.disabler_chain.iter().map(|(d, b)| {
-            let onclick = Callback::from(move |e: MouseEvent| e.prevent_default());
-            let action = if *b { "Enable " } else { "Disable " };
-            let icon = if *b { "visibility_off" } else { "visibility" };
-            html! { <a draggable="false" href="#" {onclick} class="disabler">
-                <div class="material-icons"><MatIcon>{icon}</MatIcon></div>{action}{d.description()}
-            </a> }
+        let selected: Vec<_> = self.disabler_chain.iter().map(|(_, b, _)| *b).collect();
+        let disablers = self.disabler_chain.iter()
+            .map(|(d, b, applicable)| {
+                if *applicable {
+                    let onclick = Callback::from(move |e: MouseEvent| e.prevent_default());
+                    let action = if *b { "Enable " } else { "Disable " };
+                    let icon = if *b { "visibility_off" } else { "visibility" };
+                    html! { <a draggable="false" href="#" {onclick} class="disabler">
+                        <div class="material-icons"><MatIcon>{icon}</MatIcon></div>{action}{d.description()}
+                    </a> }
+                } else {
+                    html! {}
+                }
         });
-        let normal_mode = if ctx.link().get_state().unwrap().state.ml_viewer_mode {
-            html! {}
-        } else {
-            html! {
+        let view = match ctx.link().get_state().unwrap().state.viewer_mode {
+            ViewerMode::QuantifierInstantiations | ViewerMode::ProofSteps | ViewerMode::OnlyProofSteps | ViewerMode::CDCL => html! {
                 <>
                 <AddFilterSidebar new_filter={new_filter} found_mls={found_mls} nodes={Vec::new()} general_filters={true}/>
                 <li><a draggable="false" href="#" onclick={reset}><div class="material-icons"><MatIcon>{"restore"}</MatIcon></div>{"Reset operations"}</a></li>
                 {undo}
                 </>
-            }
+            },
+            ViewerMode::MatchingLoops => html! {},
         };
+        let onselected = ctx.link().callback(|e: SelectedDetail| {
+            let Single(Some(value)) = e.index else {
+                return Msg::SwitchViewerMode(ViewerMode::QuantifierInstantiations);
+            };
+            let viewer_mode = match value {
+                0 => ViewerMode::QuantifierInstantiations,
+                1 => ViewerMode::MatchingLoops,
+                2 => ViewerMode::ProofSteps,
+                3 => ViewerMode::OnlyProofSteps,
+                4 => ViewerMode::CDCL,
+                _ => unreachable!(),
+            };
+            Msg::SwitchViewerMode(viewer_mode)
+        });
         html! {
         <>
             <SidebarSectionHeader header_text="Current Trace" collapsed_text="Actions on the current trace"><ul>
                 <li><a draggable="false" class="trace-file-name">{details}</a></li>
-                {normal_mode}
-                {ml_viewer_mode}
+                <section>
+                    <div class="view-selector">
+                    <MatSelect label="View" {onselected}>
+                        <MatListItem value="0">
+                            <li><a draggable="false" href="#" >{"quantifier instantiations"}</a></li>
+                        </MatListItem>
+                        <MatListItem value="1">
+                            <li><a draggable="false" href="#" >{"matching loops"}</a></li>
+                        </MatListItem>
+                        <MatListItem value="2">
+                            <li><a draggable="false" href="#" >{"proof steps"}</a></li>
+                        </MatListItem>
+                        <MatListItem value="3">
+                            <li><a draggable="false" href="#" >{"only proof steps"}</a></li>
+                        </MatListItem>
+                        <MatListItem value="4">
+                            <li><a draggable="false" href="#" >{"CDCL graph"}</a></li>
+                        </MatListItem>
+                    </MatSelect>
+                    </div>
+                </section>
+                {view}
+                // {normal_mode}
+                // {ml_viewer_mode}
             </ul></SidebarSectionHeader>
             {selected_nodes}
             <SidebarSectionHeader header_text={"Graph Operations"} collapsed_text={"Operations applied to the graph"}><ul>
@@ -422,6 +473,10 @@ impl Filter {
             Filter::ShowNamedQuantifier(_) => "fingerprint",
             Filter::SelectNthMatchingLoop(_) => "repeat_one",
             Filter::ShowMatchingLoopSubgraph => "repeat",
+            Filter::ShowProofSteps => "account_tree",
+            Filter::IgnoreTrivialProofSteps => "filter_alt",
+            Filter::ShowOnlyFalseProofSteps => "bolt",
+            Filter::ShowNamedProofStep(_) => "fingerprint",
         }
     }
     pub fn short_text(&self, d: impl Fn(RawNodeIndex) -> NodeKind) -> String {
@@ -471,6 +526,12 @@ impl Filter {
                 format!("Show only |{}{ordinal}| matching loop", n + 1)
             }
             Self::ShowMatchingLoopSubgraph => "S only likely matching loops".to_string(),
+            Self::ShowProofSteps => "S proof steps".to_string(),
+            Self::IgnoreTrivialProofSteps => "H trivial proof steps".to_string(),
+            Self::ShowOnlyFalseProofSteps => "S only false proof steps".to_string(),
+            Self::ShowNamedProofStep(name) => {
+                format!("Show proof step \"{name}\"")
+            }
         }
     }
     pub fn long_text(&self, d: impl Fn(RawNodeIndex) -> NodeKind, applied: bool) -> String {
@@ -568,6 +629,21 @@ impl Filter {
             }
             Self::ShowMatchingLoopSubgraph => {
                 format!("{show} only nodes in any potential matching loop")
+            }
+            Self::ShowProofSteps => {
+                format!("{show} proof steps")
+            }
+            Self::IgnoreTrivialProofSteps => {
+                format!("{hide} trivial proof steps")
+            }
+            Self::ShowOnlyFalseProofSteps => {
+                format!("{show} only proof steps proving false")
+            }
+            Self::ShowNamedProofStep(name) => {
+                format!(
+                    "{show} proof steps with name \"{}\"",
+                    display(name, applied)
+                )
             }
         }
     }

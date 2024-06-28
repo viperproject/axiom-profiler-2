@@ -19,11 +19,47 @@ pub const DEFAULT_FILTER_CHAIN: &[Filter] = &[
     Filter::IgnoreTheorySolving,
     Filter::MaxInsts(DEFAULT_NODE_COUNT),
 ];
-pub const DEFAULT_DISABLER_CHAIN: &[(Disabler, bool)] = &[
-    (Disabler::Smart, true),
-    (Disabler::ENodes, false),
-    (Disabler::GivenEqualities, false),
-    (Disabler::AllEqualities, false),
+// the second field decides whether the disabler is set or not
+// the third field decides whether the disabler is applicable or not (depends on viewer mode)
+pub const DEFAULT_DISABLER_CHAIN: &[(Disabler, bool, bool)] = &[
+    (Disabler::Smart, true, true),
+    (Disabler::ENodes, false, true),
+    (Disabler::GivenEqualities, false, true),
+    (Disabler::AllEqualities, false, true),
+    (Disabler::ProofSteps, true, false),
+    (Disabler::Instantiations, false, false),
+    (Disabler::Decisions, true, false),
+];
+// the second field decides whether the disabler is set or not
+// the third field decides whether the disabler is applicable or not (depends on viewer mode)
+pub const PROOF_STEPS_DISABLER_CHAIN: &[(Disabler, bool, bool)] = &[
+    (Disabler::Smart, true, true),
+    (Disabler::ENodes, true, false),
+    (Disabler::GivenEqualities, true, false),
+    (Disabler::AllEqualities, true, false),
+    (Disabler::ProofSteps, false, false),
+    (Disabler::Instantiations, true, true),
+    (Disabler::Decisions, true, false),
+];
+
+pub const ONLY_PROOF_STEPS_DISABLER_CHAIN: &[(Disabler, bool, bool)] = &[
+    (Disabler::Smart, true, true),
+    (Disabler::ENodes, true, false),
+    (Disabler::GivenEqualities, true, false),
+    (Disabler::AllEqualities, true, false),
+    (Disabler::ProofSteps, false, false),
+    (Disabler::Instantiations, true, false),
+    (Disabler::Decisions, true, false),
+];
+
+pub const CDCL_DISABLER_CHAIN: &[(Disabler, bool, bool)] = &[
+    (Disabler::Smart, true, true),
+    (Disabler::ENodes, true, false),
+    (Disabler::GivenEqualities, true, false),
+    (Disabler::AllEqualities, true, false),
+    (Disabler::ProofSteps, true, false),
+    (Disabler::Instantiations, true, false),
+    (Disabler::Decisions, false, false),
 ];
 
 #[derive(Debug, Clone, PartialEq, Hash)]
@@ -43,6 +79,10 @@ pub enum Filter {
     ShowNamedQuantifier(String),
     SelectNthMatchingLoop(usize),
     ShowMatchingLoopSubgraph,
+    ShowProofSteps,
+    IgnoreTrivialProofSteps,
+    ShowOnlyFalseProofSteps,
+    ShowNamedProofStep(String),
 }
 
 impl Filter {
@@ -198,6 +238,63 @@ impl Filter {
                 //     }
                 // }
             }
+            Filter::ShowProofSteps => {
+                graph
+                    .raw
+                    .set_visibility_when(false, |_: RawNodeIndex, node: &Node| {
+                        node.kind().proof_step().is_some()
+                    });
+            }
+            Filter::IgnoreTrivialProofSteps => {
+                let ctxt = config(parser);
+                graph
+                    .raw
+                    .set_visibility_when(true, |_: RawNodeIndex, node: &Node| {
+                        if let Some(ps) = node.kind().proof_step() {
+                            let ps_result = parser[ps].result.with(&ctxt).to_string();
+                            if ps_result == "false" {
+                                false
+                            } else {
+                                let ps_name = &parser.strings[*parser[ps].name];
+                                matches!(
+                                    ps_name,
+                                    "mp" | "rewrite"
+                                        | "monotonicity"
+                                        | "trans"
+                                        | "refl"
+                                        | "commutativity"
+                                        | "iff-true"
+                                        | "iff-false"
+                                        | "symm"
+                                )
+                            }
+                        } else {
+                            false
+                        }
+                    })
+            }
+            Filter::ShowOnlyFalseProofSteps => {
+                let ctxt = config(parser);
+                graph
+                    .raw
+                    .set_visibility_when(true, |_: RawNodeIndex, node: &Node| {
+                        if let Some(ps) = node.kind().proof_step() {
+                            let ps_result = parser[ps].result.with(&ctxt).to_string();
+                            ps_result != "false"
+                        } else {
+                            true
+                        }
+                    })
+            }
+            Filter::ShowNamedProofStep(name) => {
+                graph
+                    .raw
+                    .set_visibility_when(false, |_: RawNodeIndex, node: &Node| {
+                        node.kind().proof_step().is_some_and(|ps| {
+                            parser[parser[ps].name].to_string() == name
+                        })
+                    })
+            }
         }
         FilterOutput::None
     }
@@ -223,6 +320,9 @@ pub enum Disabler {
     ENodes,
     GivenEqualities,
     AllEqualities,
+    ProofSteps,
+    Instantiations,
+    Decisions,
 }
 
 impl Disabler {
@@ -271,7 +371,32 @@ impl Disabler {
                     parents == 0 || (parents == 1 && children == 1)
                 }
                 NodeKind::Instantiation(_) => false,
+                NodeKind::ProofStep(_) => {
+                    let parents = graph
+                        .graph
+                        .neighbors_directed(idx.0, Direction::Incoming)
+                        .count();
+                    let children = graph
+                        .graph
+                        .neighbors_directed(idx.0, Direction::Outgoing)
+                        .count();
+                    (parents == 0 && children == 0) || (parents == 1 && children == 1)
+                }
+                NodeKind::Decision(_) => {
+                    let parents = graph
+                        .graph
+                        .neighbors_directed(idx.0, Direction::Incoming)
+                        .count();
+                    let children = graph
+                        .graph
+                        .neighbors_directed(idx.0, Direction::Outgoing)
+                        .count();
+                    (parents == 0 && children == 0) || (parents == 1 && children == 1)
+                }
             },
+            Disabler::ProofSteps => node.kind().proof_step().is_some(),
+            Disabler::Instantiations => node.kind().inst().is_some(),
+            Disabler::Decisions => node.kind().dec().is_some(),
         }
     }
     pub fn apply(
@@ -290,6 +415,9 @@ impl Disabler {
             Disabler::ENodes => "yield terms",
             Disabler::GivenEqualities => "yield equalities",
             Disabler::AllEqualities => "all equalities",
+            Disabler::ProofSteps => "proof steps",
+            Disabler::Instantiations => "instantiations",
+            Disabler::Decisions => "decisions",
         }
     }
     pub fn icon(&self) -> &'static str {
@@ -298,6 +426,9 @@ impl Disabler {
             Disabler::ENodes => "functions",
             Disabler::GivenEqualities => "compare_arrows",
             Disabler::AllEqualities => "compare_arrows",
+            Disabler::ProofSteps => "compare_arrows",
+            Disabler::Instantiations => "compare_arrows",
+            Disabler::Decisions => "compare_arrows",
         }
     }
 }
