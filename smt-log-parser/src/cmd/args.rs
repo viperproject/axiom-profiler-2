@@ -16,12 +16,21 @@ pub enum Commands {
         logfile: std::path::PathBuf,
 
         /// Depth of dependencies to lookup
-        #[arg(short, long, default_value_t = 1)]
-        depth: u32,
+        #[arg(short, long)]
+        depth: Option<u32>,
 
         /// Whether to pretty print the output results
         #[arg(short, long, default_value_t = false)]
         pretty_print: bool,
+    },
+    #[cfg(feature = "analysis")]
+    /// Print out statistics for the SMT solver
+    Stats {
+        /// The path to the smt log file
+        logfile: std::path::PathBuf,
+        /// how many of the most instantiated axioms to print
+        #[arg(short)]
+        k: Option<usize>,
     },
     /// Tests the parser and analysis, printing out timing information
     Test {
