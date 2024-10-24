@@ -8,7 +8,7 @@ use crate::{
         BindPowerPair, ChildIndex, MatchResult, SubFormatter, TermDisplayContext, QUANT_BIND,
     },
     items::*,
-    parsers::z3::z3parser::Z3Parser,
+    parsers::z3::{stm2::Event, z3parser::Z3Parser},
     NonMaxU32, StringTable,
 };
 
@@ -293,14 +293,7 @@ impl DisplayWithCtxt<DisplayCtxt<'_>, ()> for QuantIdx {
         _data: &mut (),
     ) -> fmt::Result {
         let quant = &ctxt.parser[self];
-        if let Some(term) = quant.term {
-            term.fmt_with(f, ctxt, &mut None)
-        } else {
-            let QuantKind::Other(name) = quant.kind else {
-                panic!()
-            };
-            write!(f, "{}", &ctxt.parser[name])
-        }
+        quant.term.fmt_with(f, ctxt, &mut None)
     }
 }
 
@@ -374,8 +367,7 @@ impl DisplayWithCtxt<DisplayCtxt<'_>, ()> for &QuantKind {
         _data: &mut (),
     ) -> fmt::Result {
         match *self {
-            QuantKind::Other(kind) => write!(f, "{}", &ctxt.parser[kind]),
-            QuantKind::Lambda => {
+            QuantKind::Lambda(_) => {
                 if matches!(ctxt.config.replace_symbols, SymbolReplacement::Math) {
                     write!(f, "λ")
                 } else if ctxt.config.html() {
@@ -385,7 +377,7 @@ impl DisplayWithCtxt<DisplayCtxt<'_>, ()> for &QuantKind {
                 }
             }
             QuantKind::NamedQuant(name) => write!(f, "{}", &ctxt.parser[name]),
-            QuantKind::UnnamedQuant { name, id } => {
+            QuantKind::UnnamedQuant { name, id, .. } => {
                 write!(f, "{}!{id}", &ctxt.parser[name])
             }
         }
@@ -468,14 +460,19 @@ impl<'a, 'b> DisplayWithCtxt<DisplayCtxt<'b>, DisplayData<'b>> for &'a TermKind 
         ctxt: &DisplayCtxt<'b>,
         data: &mut DisplayData<'b>,
     ) -> fmt::Result {
-        match self {
-            &TermKind::Var(mut idx) => {
+        match *self {
+            TermKind::Var(mut idx) => {
                 let vars = data.find_quant(&mut idx).and_then(|q| q.vars.as_ref());
                 let name = VarNames::get_name(&ctxt.parser.strings, vars, idx, &ctxt.config);
                 write!(f, "{name}")
             }
-            TermKind::ProofOrApp(poa) => write!(f, "{}", poa.with_data(ctxt, data)),
-            TermKind::Quant(idx) => write!(f, "{}", ctxt.parser[*idx].with_data(ctxt, data)),
+            TermKind::App(name) => {
+                let name = &ctxt.parser[name];
+                let children = NonMaxU32::new(data.children().len() as u32).unwrap();
+                let match_ = ctxt.term_display.match_str(name, children);
+                match_.fmt_with(f, ctxt, data)
+            }
+            TermKind::Quant(idx) => write!(f, "{}", ctxt.parser[idx].with_data(ctxt, data)),
             // TODO: it would be nice to display some extra information here
             TermKind::Generalised => write!(f, "_"),
         }
@@ -496,19 +493,6 @@ fn display_child<'b>(
     .unwrap_or_else(|| write!(f, "..."))
 }
 
-impl<'a, 'b> DisplayWithCtxt<DisplayCtxt<'b>, DisplayData<'b>> for &'a ProofOrApp {
-    fn fmt_with(
-        self,
-        f: &mut fmt::Formatter<'_>,
-        ctxt: &DisplayCtxt<'b>,
-        data: &mut DisplayData<'b>,
-    ) -> fmt::Result {
-        let name = &ctxt.parser[self.name];
-        let children = NonMaxU32::new(data.children().len() as u32).unwrap();
-        let match_ = ctxt.term_display.match_str(name, children);
-        match_.fmt_with(f, ctxt, data)
-    }
-}
 impl<'a, 'b> DisplayWithCtxt<DisplayCtxt<'b>, DisplayData<'b>> for &'a MatchResult<'a, 'a> {
     fn fmt_with(
         self,
@@ -711,5 +695,41 @@ impl<'a> DisplayWithCtxt<DisplayCtxt<'a>, DisplayData<'a>> for &'a Quantifier {
                 Ok(())
             })
         })
+    }
+}
+
+impl<'a> DisplayWithCtxt<DisplayCtxt<'a>, ()> for &'a Event {
+    fn fmt_with(
+        self,
+        f: &mut fmt::Formatter<'_>,
+        ctxt: &DisplayCtxt<'a>,
+        _data: &mut (),
+    ) -> fmt::Result {
+        match *self {
+            Event::NewConst(term_idx) => {
+                let term = &ctxt.parser[term_idx];
+                let name = &ctxt.parser[term.kind.app_name().unwrap()];
+                if term.child_ids.is_empty() {
+                    write!(f, "(declare-const {name} ?)")
+                } else {
+                    write!(f, "(declare-fun {name} (?")?;
+                    for _ in 0..term.child_ids.len() - 1 {
+                        write!(f, " ?")?;
+                    }
+                    write!(f, ") ?)")
+                }
+            }
+            Event::Assert(proof_idx) => {
+                let proof = &ctxt.parser[proof_idx];
+                let display = proof.result.with(ctxt);
+                write!(f, "(assert {display})")
+            }
+            Event::Push => write!(f, "(push)"),
+            Event::Pop(num) => match num {
+                Some(num) => write!(f, "(pop {})", num.get()),
+                None => write!(f, "(pop)"),
+            },
+            Event::BeginCheck => write!(f, "(check-sat)"),
+        }
     }
 }

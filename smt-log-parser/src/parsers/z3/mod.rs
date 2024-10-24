@@ -6,6 +6,7 @@ use crate::{Error, FResult, Result};
 pub mod egraph;
 pub mod inst;
 pub mod stack;
+pub mod stm2;
 pub mod terms;
 /// Original Z3 log parser. Works with Z3 v.4.12.1, should work with other versions
 /// as long as the log format is the same for the important line cases.
@@ -27,10 +28,11 @@ impl<T: Z3LogParser + Default> LogParser for T {
         let parse = match first {
             // match the line case
             "[tool-version]" => self.version_info(split),
-            "[mk-quant]" | "[mk-lambda]" => self.mk_quant(split),
+            "[mk-quant]" => self.mk_quant(split),
+            "[mk-lambda]" => self.mk_lambda(split),
             "[mk-var]" => self.mk_var(split),
-            "[mk-proof]" => self.mk_proof_app(split, true),
-            "[mk-app]" => self.mk_proof_app(split, false),
+            "[mk-app]" => self.mk_app(split),
+            "[mk-proof]" => self.mk_proof(split),
             "[attach-meaning]" => self.attach_meaning(split),
             "[attach-var-names]" => self.attach_var_names(split),
             "[attach-enode]" => self.attach_enode(split),
@@ -81,8 +83,10 @@ pub trait Z3LogParser {
     */
     fn version_info<'a>(&mut self, l: impl Iterator<Item = &'a str>) -> Result<()>;
     fn mk_quant<'a>(&mut self, l: impl Iterator<Item = &'a str>) -> Result<()>;
+    fn mk_lambda<'a>(&mut self, l: impl Iterator<Item = &'a str>) -> Result<()>;
     fn mk_var<'a>(&mut self, l: impl Iterator<Item = &'a str>) -> Result<()>;
-    fn mk_proof_app<'a>(&mut self, l: impl Iterator<Item = &'a str>, is_proof: bool) -> Result<()>;
+    fn mk_app<'a>(&mut self, l: impl Iterator<Item = &'a str>) -> Result<()>;
+    fn mk_proof<'a>(&mut self, l: impl Iterator<Item = &'a str>) -> Result<()>;
     fn attach_meaning<'a>(&mut self, l: impl Iterator<Item = &'a str>) -> Result<()>;
     fn attach_var_names<'a>(&mut self, l: impl Iterator<Item = &'a str>) -> Result<()>;
     fn attach_enode<'a>(&mut self, l: impl Iterator<Item = &'a str>) -> Result<()>;
